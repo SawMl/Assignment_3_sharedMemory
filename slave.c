@@ -1,6 +1,6 @@
 /*Author: Shawn Anthony
 
-Date: Friday October 14, 2022
+Date: Friday November 3, 2022
 
 This program is a slave to master.c
 
@@ -32,28 +32,55 @@ the content of the shared memory segment filled in by the slaves, removes the sh
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/types.h>
+#include <semaphore.h>
 #include <errno.h>
 #include "myShm.h"
-#include <pthread.h>
-static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 //argc -> argument count
 //argv -> argument vector
 int main(int argc, char** argv){ //main function
   struct CLASS *ptr; //declare a struct CLASS pointer
   char* name = argv[1]; //Retrieve the name of the shared memory segment from the command line arguments
-  printf("Hello! This is slave! My PID is: %d\n",getpid()); //introduces themselves
-  printf("I am child number %s, received shared memory name %s\n",argv[0],name);
-  pthread_mutex_lock(&mutex);
+  printf("Slave begins execution\nI am child number %s, received shared memory name %s\n",argv[0],name); //introduces themselves
+  //printf("I am child number %s, received shared memory name %s\n",argv[0],name);
+
+  const char *semName = "Semaphore_Name2"; //named semaphore
+  /* create a named semaphore for mutual exclusion */
+  sem_t *mutex_sem = sem_open( semName, 0);
+  if (mutex_sem == SEM_FAILED) {
+      printf("slave: sem_open failed: %s\n", strerror(errno));
+      exit(1);
+  }
+
   int shm_fd = shm_open(name, O_RDWR, 0666); //initialize file descriptor
   ptr = mmap(0,sizeof(struct CLASS), PROT_WRITE, MAP_SHARED, shm_fd, 0); //assign the struct class pointer to the location in memory specified by mmap
+  printf("slave acquires access to shared memory segment, and structures it according to struct CLASS\n");
   //int x = atoi(argv[0]); //Initialize x to the child number assigned from master via command line arguments
-  ptr->response[ptr->index] = atoi(argv[0]); //write to the shared memory segment
+  /* critical section to access count in shared memory */
+  if (sem_wait(mutex_sem) == -1) {
+      printf("slave: sem_wait failed: %s/n", strerror(errno));
+      exit(1);
+  }
+  int i = ptr->index;
+  printf("slave copies index to a local variable i\n");
+  ptr->response[i] = atoi(argv[0]); //write to the shared memory segment
+  printf("slave writes its child number in response[%d]\n",i);
   ptr->index+=1; //increment the shared memory segments index variable
-  pthread_mutex_unlock(&mutex);
+  printf("slave increments index\n");
+  /* exit critical section, release mutex_sem */
+  if (sem_post(mutex_sem) == -1) {
+        printf("slave: sem_post failed: %s\n", strerror(errno));
+        exit(1);
+    }
   printf("child number %s has written child number to shared memory\n",argv[0]); //Output status
   munmap(ptr,sizeof(struct CLASS)); //stop writing to the shared memory segment
   close(shm_fd); //close the file descriptor
-  printf("child number %s closed access to shared memory and terminates\n",argv[0]);
+  /* done with semaphore, close it & free up resources
+   allocated to it */
+  if (sem_close(mutex_sem) == -1) {
+      printf("slave: sem_close failed: %s\n", strerror(errno));
+      exit(1);
+  }
+  printf("I have written my child number %s to response[%d] in shared memory\nSlave closed access to shared memory segment and terminates\n",argv[0],i);
   //free(argv);
   return 0; //return on main function
 }//main function
